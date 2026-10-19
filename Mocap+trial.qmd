@@ -1,0 +1,12 @@
+---
+title: "Mocap_trial"
+format: html
+---
+
+```{r}
+remotes::install_github("steenharsted/mocapr")
+library(mocapr)
+library(tidyverse)
+
+file <- list.files()
+```
