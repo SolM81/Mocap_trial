@@ -8,5 +8,66 @@ remotes::install_github("steenharsted/mocapr")
 library(mocapr)
 library(tidyverse)
 
-file <- list.files()
+alexia <- import_captury_csv("mocap_02/Alexia.csv")
+View(alexia)
+alexia <- alexia |> filter(!is.na(frame))
+tail(alexia$frame)
+View(alexia)
+
+
+bahar <- import_captury_csv("mocap_02/Bahar.csv")
+bahar <- bahar |> filter(!is.na(frame))
+tail(bahar$frame)
+View(bahar)
+
+kevin <- import_captury_csv("mocap_02/Kevin.csv")
+kevin <- kevin |> filter(!is.na(frame))
+tail(kevin$frame)
+View(kevin)
+
+simon <- import_captury_csv("mocap_02/Simon.csv")
+simon<- simon |> filter(!is.na(frame))
+tail(simon$frame)
+View(simon)
+
+all_skel <- bind_rows(alexia, bahar, kevin, simon)
+nrow(all_skel)            
+count(all_skel, skeleton) 
+View(all_skel)
+alexia <- alexia |> mutate(skeleton = "Alexia")
+bahar  <- bahar  |> mutate(skeleton = "Bahar")
+kevin  <- kevin  |> mutate(skeleton = "Kevin")
+simon  <- simon  |> mutate(skeleton = "Simon")
+View(all_skel)
+ggplot(all_skel, aes(x = CGX, y = CGZ, colour = skeleton)) +
+  geom_path() +
+  coord_equal()
+ggplot(all_skel, aes(x = CGX, y = CGZ)) +
+  geom_path() +
+  coord_equal() +
+  facet_wrap(~ skeleton)
+ggplot(all_skel, aes(x = CGX, y = CGZ, colour = time_seconds)) +
+  geom_path() +
+  coord_equal() +
+  facet_wrap(~ skeleton) +
+  scale_colour_viridis_c()
+all_skel |>
+  filter(time_seconds < 20) |>
+  ggplot(aes(x = CGX, y = CGZ, colour = time_seconds)) +
+  geom_path() +
+  coord_equal() +
+  facet_wrap(~ skeleton) +
+  scale_colour_viridis_c()
+names(all_skel)
+pair_KB <- inner_join(
+  kevin |> select(frame, time_seconds, leader_x = CGX, leader_z = CGZ),
+  bahar |> select(frame, follower_x = CGX, follower_z = CGZ),
+  by = "frame"
+)
+pair_KB <- pair_KB |>
+  mutate(distance_m = sqrt((leader_x - follower_x)^2 +
+                           (leader_z - follower_z)^2) / 1000)
+  ggplot(pair_KB, aes(time_seconds, distance_m)) +
+  geom_line()  
+                    
 ```
