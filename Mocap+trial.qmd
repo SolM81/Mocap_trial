@@ -30,14 +30,14 @@ simon<- simon |> filter(!is.na(frame))
 tail(simon$frame)
 View(simon)
 
-all_skel <- bind_rows(alexia, bahar, kevin, simon)
-nrow(all_skel)            
-count(all_skel, skeleton) 
-View(all_skel)
+
 alexia <- alexia |> mutate(skeleton = "Alexia")
 bahar  <- bahar  |> mutate(skeleton = "Bahar")
 kevin  <- kevin  |> mutate(skeleton = "Kevin")
 simon  <- simon  |> mutate(skeleton = "Simon")
+all_skel <- bind_rows(alexia, bahar, kevin, simon)
+nrow(all_skel)            
+count(all_skel, skeleton) 
 View(all_skel)
 ggplot(all_skel, aes(x = CGX, y = CGZ, colour = skeleton)) +
   geom_path() +
@@ -68,6 +68,56 @@ pair_KB <- pair_KB |>
   mutate(distance_m = sqrt((leader_x - follower_x)^2 +
                            (leader_z - follower_z)^2) / 1000)
   ggplot(pair_KB, aes(time_seconds, distance_m)) +
-  geom_line()  
-                    
+  geom_line()
+
+
+pair_KB |>
+  mutate(kevin_earlier_x = lag(leader_x, 50),
+         kevin_earlier_z = lag(leader_z, 50)) |>
+  summarise(mean_gap_m = mean(sqrt((kevin_earlier_x - follower_x)^2 +
+                                   (kevin_earlier_z - follower_z)^2),
+                              na.rm = TRUE) / 1000)
+
+delays <- 0:150   
+
+gap_by_delay <- map(delays, \(d)
+  pair_KB |>
+    mutate(lx = lag(leader_x, d), lz = lag(leader_z, d)) |>
+    summarise(mean_gap_m = mean(sqrt((lx - follower_x)^2 +
+                                     (lz - follower_z)^2), na.rm = TRUE) / 1000) |>
+    mutate(delay_s = d / 50)
+) |> list_rbind()
+
+ggplot(gap_by_delay, aes(delay_s, mean_gap_m)) +
+  geom_line()
+
+gap_by_delay |> slice_min(mean_gap_m)
+
+gap_by_delay |> filter(delay_s == 0)
+
+gap_window <- map(delays, \(d)
+  pair_KB |>
+    mutate(lx = lag(leader_x, d),
+           lz = lag(leader_z, d),
+           window = floor(time_seconds / 10) * 10) |>
+    group_by(window) |>
+    summarise(mean_gap_m = mean(sqrt((lx - follower_x)^2 +
+                                     (lz - follower_z)^2), na.rm = TRUE) / 1000) |>
+    mutate(delay_s = d / 50)
+) |> list_rbind()
+best_KB <- gap_window |>
+  group_by(window) |>
+  slice_min(mean_gap_m)
+
+ggplot(best_KB, aes(window, delay_s)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Time (s)", y = "Follower delay (s)")
+
+ggplot(best_KB, aes(window, delay_s)) +
+  geom_line() +
+  geom_point(aes(size = mean_gap_m)) +
+  labs(x = "Time (s)", y = "Follower delay (s)", size = "Gap (m)")
+
+best_KB <- best_KB |> filter(window < 120)
 ```
