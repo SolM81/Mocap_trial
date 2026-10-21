@@ -1,0 +1,46 @@
+---
+title: "session1_2"
+format: html
+---
+
+
+```{r}
+library(tidyverse)
+library(mocapr)
+
+files2 <- list.files("mocap_02", pattern = "\\.csv$", full.names = TRUE)
+sess2  <- map(files2, read_one) |> list_rbind()
+
+both_sess <- bind_rows(
+  sess_fixed |> mutate(session = "Session 1"),
+  sess2      |> mutate(session = "Session 2")
+)
+
+as <- both_sess |>
+  filter(skeleton %in% c("Alexia", "Simon")) |>
+  group_by(session, skeleton) |>
+  arrange(frame, .by_group = TRUE) |>
+  mutate(speed_ms = sqrt((CGX - lag(CGX))^2 + (CGZ - lag(CGZ))^2) / 1000 * 50) |>
+  ungroup()
+
+as |>
+  group_by(skeleton, session) |>
+  summarise(mean_speed_ms = mean(speed_ms, na.rm = TRUE),
+            distance_m    = sum(speed_ms, na.rm = TRUE) / 50,
+            .groups = "drop")
+as |>
+  mutate(window = floor(time_seconds / 10) * 10) |>
+  group_by(session, skeleton, window) |>
+  summarise(mean_speed = mean(speed_ms, na.rm = TRUE), .groups = "drop") |>
+  ggplot(aes(window, mean_speed, colour = session)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ skeleton, ncol = 1) +
+  labs(x = "Time (s)", y = "Mean speed (m/s)", colour = NULL)
+
+ggplot(ak, aes(CGX, CGZ, colour = time_seconds)) +
+  geom_path() +
+  coord_equal() +
+  facet_grid(session ~ skeleton) +
+  scale_colour_viridis_c()
+```
