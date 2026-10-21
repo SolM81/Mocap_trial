@@ -38,9 +38,82 @@ as |>
   facet_wrap(~ skeleton, ncol = 1) +
   labs(x = "Time (s)", y = "Mean speed (m/s)", colour = NULL)
 
-ggplot(ak, aes(CGX, CGZ, colour = time_seconds)) +
+ggplot(as, aes(CGX, CGZ, colour = time_seconds)) +
   geom_path() +
   coord_equal() +
   facet_grid(session ~ skeleton) +
   scale_colour_viridis_c()
+
+follow_windows <- function(data, leader, follower, delays = 0:300) {
+  pair <- inner_join(
+    data |> filter(skeleton == leader) |>
+      select(frame, time_seconds, leader_x = CGX, leader_z = CGZ),
+    data |> filter(skeleton == follower) |>
+      select(frame, follower_x = CGX, follower_z = CGZ),
+    by = "frame"
+  )
+
+  map(delays, \(d)
+    pair |>
+      mutate(lx = lag(leader_x, d), lz = lag(leader_z, d),
+             window = floor(time_seconds / 10) * 10) |>
+      group_by(window) |>
+      summarise(mean_gap_m = mean(sqrt((lx - follower_x)^2 +
+                                       (lz - follower_z)^2), na.rm = TRUE) / 1000,
+                .groups = "drop") |>
+      mutate(delay_s = d / 50)
+  ) |>
+    list_rbind() |>
+    group_by(window) |>
+    slice_min(mean_gap_m, with_ties = FALSE) |>
+    ungroup() |>
+    mutate(leader = leader, follower = follower)
+}
+s2_K <- follow_windows(sess2, "Kevin",  "Bahar") |> mutate(session = "Session 2")
+s2_A <- follow_windows(sess2, "Alexia", "Simon") |> mutate(session = "Session 2")
+
+s1_K <- follow_windows(sess_fixed, "Kevin",  "Bahar") |> mutate(session = "Session 1")
+s1_A <- follow_windows(sess_fixed, "Alexia", "Simon") |> mutate(session = "Session 1")
+
+leading <- bind_rows(s1_K, s1_A, s2_K, s2_A) |>
+  filter(window > 0, window < 120) |>
+  mutate(following = mean_gap_m < 0.5 & delay_s > 0 & delay_s < 6)
+
+ggplot(leading, aes(window, delay_s, colour = session)) +
+  geom_line(data = filter(leading, following)) +
+  geom_point(aes(size = mean_gap_m, shape = following)) +
+  facet_wrap(~ leader, ncol = 1) +
+  labs(x = "Time (s)", y = "Follower delay (s)", colour = NULL,
+       size = "Gap (m)", shape = "Following?")
+       
+nrow(s1_K)
+nrow(s1_A)
+
+unique(sess_fixed$skeleton)
+
+joints<- c("LW", "LE", "LS", "RW", "RE", "RS",
+              "LH", "LK", "LA", "LT", "RH", "RK", "RA", "RT")
+pos_cols <- paste0(rep(joints, each = 3), c("X", "Y", "Z"))
+pos_cols
+kin_long <- sess2 |>
+  filter(frame %% 5 == 0) |>
+  select(skeleton, frame, time_seconds, all_of(pos_cols)) |>
+  pivot_longer(all_of(pos_cols),
+               names_to = c("joint", "axis"),
+               names_pattern = "(.*)([XYZ])$",
+               values_to = "pos")
+kin <- kin_long |>
+  group_by(skeleton, frame, time_seconds, axis) |>
+  summarise(range_m = (max(pos) - min(pos)) / 1000, .groups = "drop") |>
+  pivot_wider(names_from = axis, values_from = range_m) |>
+  mutate(volume_m3 = X * Y * Z)
+ggplot(kin, aes(time_seconds, volume_m3, colour = skeleton)) +
+  geom_line(alpha = 0.7) +
+  labs(x = "Time (s)", y = "Kinesphere (m³)", colour = NULL)  
+kin |> group_by(skeleton) |> summarise(median_volume = median(volume_m3)) 
+ggplot(kin, aes(time_seconds, volume_m3)) +
+  geom_line() +
+  facet_wrap(~ skeleton, ncol = 1) +
+  labs(x = "Time (s)", y = "Kinesphere (m³)")
+
 ```
