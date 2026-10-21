@@ -1,0 +1,116 @@
+---
+title: "Failed session"
+format: html
+----
+
+```{r}
+
+library(tidyverse)
+library(mocapr)
+
+files <- list.files("mocap_01", pattern = "\\.csv$", full.names = TRUE)
+files
+
+read_one <- function(f) {
+  import_captury_csv(f) |>
+    filter(!is.na(frame)) |>
+    mutate(skeleton = tools::file_path_sans_ext(basename(f)), .before = 1)
+}
+sess <- map(files, read_one) |> list_rbind()
+
+qom6 <- sess |>
+  group_by(skeleton) |>
+  arrange(frame, .by_group = TRUE) |>
+  mutate(step_mm  = sqrt((CGX - lag(CGX))^2 + (CGZ - lag(CGZ))^2),
+         speed_ms = step_mm / 1000 * 50) |>
+  ungroup()
+
+qom6 |> group_by(skeleton) |> summarise(jumps = sum(speed_ms > 4, na.rm = TRUE))
+
+swap_ids <- function(data, a, b, from_s, to_s = Inf)
+  data |>
+    mutate(skeleton = case_when(
+      time_seconds >= from_s & time_seconds < to_s & skeleton == a ~ b,
+      time_seconds >= from_s & time_seconds < to_s & skeleton == b ~ a,
+      .default = skeleton
+    ))
+   
+   sess_fixed <- sess |>
+  swap_ids("Kevin", "Luc", from_s = 61.4) |>
+  swap_ids("Alexia", "Sol", from_s = 80.2, to_s = 85.0)
+
+sess_fixed <- sess |>
+  swap_ids("Kevin", "Luc", from_s = 61.4)
+
+cg <- sess |> select(frame, time_seconds, skeleton, CGX, CGZ)
+
+close_frames <- inner_join(cg, cg, by = c("frame", "time_seconds"),
+                           suffix = c("_a", "_b"), relationship = "many-to-many") |>
+  filter(skeleton_a < skeleton_b) |>
+  mutate(dist_m = sqrt((CGX_a - CGX_b)^2 + (CGZ_a - CGZ_b)^2) / 1000) |>
+  filter(dist_m < 0.5)
+
+events <- close_frames |>
+  group_by(skeleton_a, skeleton_b) |>
+  arrange(frame, .by_group = TRUE) |>
+  mutate(event = cumsum(frame - lag(frame, default = -Inf) > 25)) |>
+  group_by(skeleton_a, skeleton_b, event) |>
+  summarise(start_s   = min(time_seconds),
+            end_s     = max(time_seconds),
+            closest_m = min(dist_m),
+            .groups = "drop")
+
+events
+
+sess |>
+  filter(skeleton %in% c("Bahar", "Luc", "Simon"),
+         time_seconds > 30, time_seconds < 50) |>
+  pivot_longer(c(CGX, CGZ), names_to = "axis", values_to = "pos") |>
+  ggplot(aes(time_seconds, pos, colour = skeleton)) +
+  geom_line() +
+  facet_wrap(~ axis, ncol = 1, scales = "free_y")
+
+sess_fixed <- sess |>
+  filter(!(skeleton == "Luc" & time_seconds >= 38.0))
+
+sess_fixed |>
+  group_by(skeleton) |>
+  summarise(last_s = max(time_seconds), n = n())
+
+events <- close_frames |>
+  group_by(skeleton_a, skeleton_b) |>
+  arrange(frame, .by_group = TRUE) |>
+  mutate(event = cumsum(frame - lag(frame, default = -Inf) > 25)) |>
+  group_by(skeleton_a, skeleton_b, event) |>
+  summarise(start_s   = min(time_seconds),
+            end_s     = max(time_seconds),
+            closest_m = min(dist_m),
+            .groups = "drop")
+
+events
+
+sess_fixed |> filter(skeleton == "Luc") |> summarise(last_s = max(time_seconds))
+
+cg <- sess_fixed |> select(frame, time_seconds, skeleton, CGX, CGZ)
+
+close_frames <- inner_join(cg, cg, by = c("frame", "time_seconds"),
+                           suffix = c("_a", "_b"), relationship = "many-to-many") |>
+  filter(skeleton_a < skeleton_b) |>
+  mutate(dist_m = sqrt((CGX_a - CGX_b)^2 + (CGZ_a - CGZ_b)^2) / 1000) |>
+  filter(dist_m < 0.5)
+
+events <- close_frames |>
+  group_by(skeleton_a, skeleton_b) |>
+  arrange(frame, .by_group = TRUE) |>
+  mutate(event = cumsum(frame - lag(frame, default = -Inf) > 25)) |>
+  group_by(skeleton_a, skeleton_b, event) |>
+  summarise(start_s   = min(time_seconds),
+            end_s     = max(time_seconds),
+            closest_m = min(dist_m),
+            .groups = "drop")
+
+events
+
+write_csv(sess_fixed, "session1_fixed.csv")
+
+```

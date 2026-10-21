@@ -123,14 +123,14 @@ best_KB <- best_KB |> filter(window < 120)
 
 ###
 pair_AS <- inner_join(
-  alexia |> select(frame, time_seconds, leader_x = CGX, leader_z = CGZ),
+  alexia|> select(frame, time_seconds, leader_x = CGX, leader_z = CGZ),
   simon |> select(frame, follower_x = CGX, follower_z = CGZ),
   by = "frame"
 )
-pair_AS <- pair_KB |>
+pair_AS <- pair_AS |>
   mutate(distance_m = sqrt((leader_x - follower_x)^2 +
                            (leader_z - follower_z)^2) / 1000)
-  ggplot(pair_KB, aes(time_seconds, distance_m)) +
+  ggplot(pair_AS, aes(time_seconds, distance_m)) +
   geom_line()
 
 
@@ -225,5 +225,103 @@ best_AS <- gap_window_AS |> group_by(window) |> slice_min(mean_gap_m)
 
 head(best_KB)
 head(best_AS)
+
+both <- both |>
+  mutate(following = mean_gap_m < 0.5 & delay_s > 0 & delay_s < 6)
+
+ggplot(both, aes(window, delay_s, colour = pair)) +
+  geom_line(data = filter(both, following)) +
+  geom_point(aes(shape = following), size = 3) +
+  labs(x = "Time (s)", y = "Follower delay (s)", colour = NULL,
+       shape = "Following?")
+  
+  qom <- all_skel |>
+  group_by(skeleton) |>
+  arrange(frame, .by_group = TRUE) |>
+  mutate(step_mm  = sqrt((CGX - lag(CGX))^2 + (CGZ - lag(CGZ))^2),
+         speed_ms = step_mm / 1000 * 50) |>
+  ungroup()
+
+qom_window <- qom |>
+  mutate(window = floor(time_seconds / 10) * 10) |>
+  group_by(skeleton, window) |>
+  summarise(mean_speed = mean(speed_ms, na.rm = TRUE), .groups = "drop") |>
+  filter(window < 120)
+ggplot(qom_window, aes(window, mean_speed, colour = skeleton)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Time (s)", y = "Mean speed (m/s)", colour = NULL)
+
+speed_wide <- qom |>
+  select(skeleton, frame, time_seconds, speed_ms) |>
+  group_by(skeleton) |>
+  mutate(speed_smooth = as.numeric(stats::filter(speed_ms, rep(1/25, 25), sides = 2))) |>
+  ungroup() |>
+  select(-speed_ms) |>
+  pivot_wider(names_from = skeleton, values_from = speed_smooth)
+
+delays <- 0:300
+
+cc_KB <- map(delays, \(d)
+  speed_wide |>
+    mutate(leader = lag(Kevin, d),
+           window = floor(time_seconds / 10) * 10) |>
+    group_by(window) |>
+    summarise(r = cor(leader, Bahar, use = "complete.obs")) |>
+    mutate(delay_s = d / 50)
+) |> list_rbind()
+
+cc_AS <- map(delays, \(d)
+  speed_wide |>
+    mutate(leader = lag(Alexia, d),
+           window = floor(time_seconds / 10) * 10) |>
+    group_by(window) |>
+    summarise(r = cor(leader, Simon, use = "complete.obs")) |>
+    mutate(delay_s = d / 50)
+) |> list_rbind()
+
+best_cc_KB <- cc_KB |>
+  group_by(window) |>
+  slice_max(r) |>
+  filter(window < 120)
+
+best_cc_AS <- cc_AS |>
+  group_by(window) |>
+  slice_max(r) |>
+  filter(window < 120)
+
+both_cc <- bind_rows(
+  best_cc_KB |> mutate(pair = "Kevin → Bahar"),
+  best_cc_AS |> mutate(pair = "Alexia → Simon")
+)
+
+ggplot(both_cc, aes(window, r, colour = pair)) +
+  geom_line() +
+  geom_point(aes(size = delay_s)) +
+  labs(x = "Time (s)", y = "Speed correlation (r)",
+       size = "Delay (s)", colour = NULL)
+ shift <- function(x, d) if (d >= 0) lag(x, d) else lead(x, -d)
+ 
+ delays <- -300:300
+
+gap_window_AS2 <- map(delays, \(d)
+  pair_AS |>
+    mutate(lx = shift(leader_x, d), lz = shift(leader_z, d),
+           window = floor(time_seconds / 10) * 10) |>
+    group_by(window) |>
+    summarise(mean_gap_m = mean(sqrt((lx - follower_x)^2 +
+                                     (lz - follower_z)^2), na.rm = TRUE) / 1000) |>
+    mutate(delay_s = d / 50)
+) |> list_rbind()
+
+best_AS2 <- gap_window_AS2 |>
+  group_by(window) |>
+  slice_min(mean_gap_m) |>
+  filter(window > 0, window < 120)
+ggplot(best_AS2, aes(window, delay_s)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_line() +
+  geom_point(aes(size = mean_gap_m)) +
+  labs(x = "Time (s)", y = "Simon's delay (s)", size = "Gap (m)")+ geom_vline(xintercept = 45, colour = "red")
 ```
 
