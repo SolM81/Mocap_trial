@@ -8,7 +8,7 @@ format: html
 library(tidyverse)
 library(mocapr)
 
-files <- list.files("mocap_01", pattern = "\\.csv$", full.names = TRUE)
+files <- list.files("mocap_02", pattern = "\\.csv$", full.names = TRUE)
 files
 
 read_one <- function(f) {

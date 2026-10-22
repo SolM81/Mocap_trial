@@ -8,13 +8,15 @@ format: html
 library(tidyverse)
 library(mocapr)
 
-files2 <- list.files("mocap_02", pattern = "\\.csv$", full.names = TRUE)
-sess2  <- map(files2, read_one) |> list_rbind()
+sess_fixed <- read_csv("session1_fixed.csv")
+sess2      <- read_csv("session2_clean.csv")
 
 both_sess <- bind_rows(
   sess_fixed |> mutate(session = "Session 1"),
-  sess2      |> mutate(session = "Session 2")
+  sess2
 )
+
+count(both_sess, session, skeleton)
 
 as <- both_sess |>
   filter(skeleton %in% c("Alexia", "Simon")) |>
@@ -60,8 +62,7 @@ follow_windows <- function(data, leader, follower, delays = 0:300) {
       group_by(window) |>
       summarise(mean_gap_m = mean(sqrt((lx - follower_x)^2 +
                                        (lz - follower_z)^2), na.rm = TRUE) / 1000,
-                .groups = "drop") |>
-      mutate(delay_s = d / 50)
+                .groups = "drop") |> mutate(delay_s = d / 50)
   ) |>
     list_rbind() |>
     group_by(window) |>
@@ -116,4 +117,150 @@ ggplot(kin, aes(time_seconds, volume_m3)) +
   facet_wrap(~ skeleton, ncol = 1) +
   labs(x = "Time (s)", y = "Kinesphere (m³)")
 
+install.packages("crqa")
+library(crqa)
+
+joints <- c("LW", "LE", "LS", "RW", "RE", "RS",
+            "LH", "LK", "LA", "LT", "RH", "RK", "RA", "RT")
+xcols <- paste0(joints, "X"); ycols <- paste0(joints, "Y"); zcols <- paste0(joints, "Z")
+
+alexia2 <- sess2 |>
+  filter(skeleton == "Alexia", frame %% 5 == 0) |>
+  arrange(frame) |>
+  mutate(pelvX = (LHX + RHX) / 2,
+         pelvY = (LHY + RHY) / 2,
+         pelvZ = (LHZ + RHZ) / 2) |>
+  mutate(across(all_of(xcols), \(v) v - pelvX),
+         across(all_of(ycols), \(v) v - pelvY),
+         across(all_of(zcols), \(v) v - pelvZ))
+
+pc <- prcomp(alexia2 |> select(all_of(c(xcols, ycols, zcols))))
+summary(pc)$importance[, 1:5]
+
+X <- pc$x[, 1:3]
+
+win  <- 40   # 4 s at 10 Hz
+step <- 5    # move by 0.5 s
+starts <- seq(1, nrow(X) - win + 1, by = step)
+
+rqa_alexia2 <- map(starts, \(s) {
+  Xw <- X[s:(s + win - 1), ]
+  d  <- as.matrix(dist(Xw))
+  r  <- max(quantile(d[upper.tri(d)], 0.05), 1e-6)
+  res <- crqa(Xw, Xw, delay = 1, embed = 1, rescale = 0, radius = r,
+              normalize = 0, mindiagline = 2, minvertline = 2, tw = 0,
+              whiteline = FALSE, recpt = FALSE, side = "upper",
+              method = "mdcrqa", metric = "euclidean", datatype = "continuous")
+  tibble(time_s = (s - 1) / 10 + 2,
+         RR = res$RR, DET = res$DET, L = res$L, LAM = res$LAM, ENTR = res$ENTR)
+}) |> list_rbind()
+
+rqa_alexia2 |>
+  pivot_longer(c(DET, LAM), names_to = "measure", values_to = "value") |>
+  ggplot(aes(time_s, value)) +
+  geom_line() +
+  facet_wrap(~ measure, ncol = 1, scales = "free_y") +
+  labs(x = "Time (s)", y = "%")
+
+summary(rqa_alexia2$RR)
+
+rqa_alexia2 |>
+  mutate(window = floor(time_s / 10) * 10) |>
+  group_by(window) |>
+  summarise(DET = mean(DET), LAM = mean(LAM))
+
+auto_rqa <- function(data, who, win = 40, step = 5) {
+  p <- data |>
+    filter(skeleton == who, frame %% 5 == 0) |>
+    arrange(frame) |>
+    mutate(pelvX = (LHX + RHX) / 2, pelvY = (LHY + RHY) / 2, pelvZ = (LHZ + RHZ) / 2) |>
+    mutate(across(all_of(xcols), \(v) v - pelvX),
+           across(all_of(ycols), \(v) v - pelvY),
+           across(all_of(zcols), \(v) v - pelvZ))
+  X <- prcomp(p |> select(all_of(c(xcols, ycols, zcols))))$x[, 1:3]
+  starts <- seq(1, nrow(X) - win + 1, by = step)
+  map(starts, \(s) {
+    Xw <- X[s:(s + win - 1), ]
+    d  <- as.matrix(dist(Xw))
+    r  <- max(quantile(d[upper.tri(d)], 0.05), 1e-6)
+    res <- crqa(Xw, Xw, delay = 1, embed = 1, rescale = 0, radius = r,
+                normalize = 0, mindiagline = 2, minvertline = 2, tw = 0,
+                whiteline = FALSE, recpt = FALSE, side = "upper",
+                method = "mdcrqa", metric = "euclidean", datatype = "continuous")
+    tibble(skeleton = who, time_s = p$time_seconds[s] + win / 20,
+           RR = res$RR, DET = res$DET, L = res$L, LAM = res$LAM, ENTR = res$ENTR)
+  }) |> list_rbind()
+}
+
+rqa_s2 <- map(c("Alexia", "Bahar", "Kevin", "Simon"), \(w) auto_rqa(sess2, w)) |>
+  list_rbind() |> mutate(session = "Session 2")
+
+rqa_s1 <- map(c("Alexia", "Bahar", "Kevin", "Luc", "Simon", "Sol"), \(w) auto_rqa(sess_fixed, w)) |>
+  list_rbind() |> mutate(session = "Session 1")
+
+bind_rows(rqa_s1, rqa_s2) |>
+  group_by(skeleton, session) |>
+  summarise(DET = mean(DET), L = mean(L), LAM = mean(LAM), .groups = "drop")
+
+qom10 <- function(data, who) {
+  p <- data |> filter(skeleton == who) |> arrange(frame)
+  spd <- map(joints, \(j)
+    sqrt((p[[paste0(j, "X")]] - lag(p[[paste0(j, "X")]]))^2 +
+         (p[[paste0(j, "Y")]] - lag(p[[paste0(j, "Y")]]))^2 +
+         (p[[paste0(j, "Z")]] - lag(p[[paste0(j, "Z")]]))^2)
+  ) |> reduce(`+`)
+  tibble(frame = p$frame, qom = spd / 1000 * 50) |>
+    group_by(block = frame %/% 5) |>
+    summarise(time_s = min(frame) / 50, qom = mean(qom, na.rm = TRUE), .groups = "drop") |>
+    mutate(qom_z = (qom - mean(qom, na.rm = TRUE)) / sd(qom, na.rm = TRUE)) |>
+    select(time_s, qom_z)
+}
+
+pairQ <- inner_join(qom10(sess2, "Kevin"), qom10(sess2, "Bahar"),
+                    by = "time_s", suffix = c("_A", "_B")) |>
+  drop_na()
+
+ac  <- acf(pairQ$qom_z_A, lag.max = 20, plot = FALSE)$acf[-1]
+tau <- if (any(ac <= 0)) which(ac <= 0)[1] else 20
+m   <- 3
+
+embed_ts <- function(x, m, tau) {
+  n <- length(x) - (m - 1) * tau
+  sapply(0:(m - 1), \(i) x[1:n + i * tau])
+}
+EA <- embed_ts(pairQ$qom_z_A, m, tau)
+EB <- embed_ts(pairQ$qom_z_B, m, tau)
+tA <- pairQ$time_s[1:nrow(EA)]
+tau
+
+win <- 40; step <- 5
+starts <- seq(1, nrow(EA) - win + 1, by = step)
+
+xrqa_KB <- map(starts, \(s) {
+  Aw <- EA[s:(s + win - 1), ]; Bw <- EB[s:(s + win - 1), ]
+  d  <- as.matrix(dist(rbind(Aw, Bw)))[1:win, (win + 1):(2 * win)]
+  r  <- max(quantile(d, 0.05), 1e-6)
+  res <- crqa(Aw, Bw, delay = 1, embed = 1, rescale = 0, radius = r,
+              normalize = 0, mindiagline = 2, minvertline = 2, tw = 0,
+              whiteline = FALSE, recpt = FALSE, side = "both",
+              method = "mdcrqa", metric = "euclidean", datatype = "continuous")
+  tibble(time_s = tA[s] + win / 20, RR = res$RR, DET = res$DET)
+}) |> list_rbind()
+
+ggplot(xrqa_KB, aes(time_s, DET)) + geom_line() +
+  labs(x = "Time (s)", y = "Cross-DET (%)")
+
+d_all <- as.matrix(dist(rbind(EA, EB)))[1:nrow(EA), (nrow(EA) + 1):(2 * nrow(EA))]
+r_all <- quantile(d_all, 0.05)
+maxLag <- 40   # 4 s
+
+prof_KB <- map(-maxLag:maxLag, \(k) {
+  i <- if (k >= 0) 1:(nrow(EA) - k) else (1 - k):nrow(EA)
+  tibble(lag_s = k / 10,
+         rr = mean(sqrt(rowSums((EA[i, ] - EB[i + k, ])^2)) < r_all))
+}) |> list_rbind()
+
+ggplot(prof_KB, aes(lag_s, rr)) +
+  geom_line() + geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(x = "Lag (s)   (+ = Kevin leads, − = Bahar leads)", y = "Recurrence rate")
 ```
